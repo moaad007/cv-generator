@@ -1,19 +1,24 @@
 "use client";
 
-import { Eye, ZoomIn, ZoomOut } from "lucide-react";
+import { forwardRef } from "react";
+import { ZoomIn, ZoomOut } from "lucide-react";
 
-export default function CvPreview({ profile, jobTitle }) {
+const CvPreview = forwardRef(function CvPreview({ profile, jobTitle }, ref) {
   const personal = profile?.personal || {};
   const experience = profile?.experience || [];
   const projects = profile?.projects || [];
   const education = profile?.education || [];
   const skills = profile?.skills || [];
+  const languages = profile?.languages || [];
+  const certifications = profile?.certifications || [];
   const summary = profile?.summary || "";
+
+  const hasContent = summary || experience.length || projects.length || skills.length || education.length;
 
   return (
     <div className="flex flex-col h-screen bg-muted/30">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-white">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-white shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 bg-teal rounded-full animate-pulse" />
           <span className="text-sm font-medium text-navy">Live Preview</span>
@@ -31,34 +36,42 @@ export default function CvPreview({ profile, jobTitle }) {
 
       {/* CV Preview */}
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="bg-white rounded-xl shadow-sm border border-border max-w-2xl mx-auto">
-          {/* CV Content */}
+        <div
+          ref={ref}
+          id="cv-preview-content"
+          className="bg-white rounded-xl shadow-sm border border-border max-w-2xl mx-auto"
+        >
           <div className="p-8">
-            {/* Name & Title */}
+            {/* Name */}
             <h1 className="text-3xl font-bold text-navy mb-1">
               {personal.name || "Your Name"}
             </h1>
-            <p className="text-lg text-navy-muted font-medium mb-4">
-              {jobTitle || "Job Title"}
-            </p>
 
             {/* Contact */}
-            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mb-6 pb-6 border-b border-border">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground mb-6 pb-6 border-b border-border">
               {personal.email && <span>{personal.email}</span>}
-              {personal.email && personal.github && <span>•</span>}
-              {personal.github && <span>{personal.github}</span>}
-              {(personal.email || personal.github) && personal.linkedin && <span>•</span>}
-              {personal.linkedin && <span>{personal.linkedin}</span>}
               {personal.phone && (
                 <>
-                  {(personal.email || personal.github || personal.linkedin) && <span>•</span>}
+                  {personal.email && <span className="text-border">•</span>}
                   <span>{personal.phone}</span>
                 </>
               )}
               {personal.location && (
                 <>
-                  {(personal.email || personal.github || personal.linkedin || personal.phone) && <span>•</span>}
+                  {(personal.email || personal.phone) && <span className="text-border">•</span>}
                   <span>{personal.location}</span>
+                </>
+              )}
+              {personal.linkedin && (
+                <>
+                  {(personal.email || personal.phone || personal.location) && <span className="text-border">•</span>}
+                  <span>{personal.linkedin}</span>
+                </>
+              )}
+              {personal.github && (
+                <>
+                  {(personal.email || personal.phone || personal.location || personal.linkedin) && <span className="text-border">•</span>}
+                  <span>{personal.github}</span>
                 </>
               )}
             </div>
@@ -78,21 +91,19 @@ export default function CvPreview({ profile, jobTitle }) {
               <div className="mb-6">
                 <h2 className="text-xs font-bold text-navy tracking-wider uppercase mb-3 flex items-center gap-2">
                   <span className="w-1.5 h-1.5 bg-teal rounded-full" />
-                  Experience & Projects
+                  Experience
                 </h2>
                 {experience.map((exp, i) => (
                   <div key={i} className="mb-4 last:mb-0">
                     <div className="flex items-start justify-between mb-1">
-                      <div>
-                        <p className="font-semibold text-foreground text-sm">
-                          {exp.role || "Role"}
-                          {exp.company && (
-                            <span className="text-navy-muted font-normal"> ({exp.company})</span>
-                          )}
-                        </p>
-                      </div>
+                      <p className="font-semibold text-foreground text-sm">
+                        {exp.role || "Role"}
+                        {exp.company && (
+                          <span className="text-navy-muted font-normal"> — {exp.company}</span>
+                        )}
+                      </p>
                       <span className="text-xs text-muted-foreground whitespace-nowrap ml-4">
-                        {exp.startDate || "Start"} - {exp.endDate || "Present"}
+                        {exp.startDate || ""}{exp.endDate ? ` — ${exp.endDate}` : ""}
                       </span>
                     </div>
                     {exp.responsibilities?.length > 0 && (
@@ -100,10 +111,15 @@ export default function CvPreview({ profile, jobTitle }) {
                         {exp.responsibilities.map((r, j) => (
                           <li key={j} className="text-sm text-foreground flex items-start gap-2">
                             <span className="text-teal mt-1.5 shrink-0">•</span>
-                            {r}
+                            <span>{r}</span>
                           </li>
                         ))}
                       </ul>
+                    )}
+                    {exp.technologies?.length > 0 && (
+                      <p className="text-xs text-navy-muted mt-1.5 italic">
+                        {exp.technologies.join(", ")}
+                      </p>
                     )}
                   </div>
                 ))}
@@ -111,7 +127,7 @@ export default function CvPreview({ profile, jobTitle }) {
             )}
 
             {/* Projects */}
-            {projects.length > 0 && experience.length === 0 && (
+            {projects.length > 0 && (
               <div className="mb-6">
                 <h2 className="text-xs font-bold text-navy tracking-wider uppercase mb-3 flex items-center gap-2">
                   <span className="w-1.5 h-1.5 bg-teal rounded-full" />
@@ -119,7 +135,12 @@ export default function CvPreview({ profile, jobTitle }) {
                 </h2>
                 {projects.map((proj, i) => (
                   <div key={i} className="mb-4 last:mb-0">
-                    <p className="font-semibold text-foreground text-sm">{proj.name || "Project"}</p>
+                    <p className="font-semibold text-foreground text-sm">
+                      {proj.name || "Project"}
+                      {proj.type && (
+                        <span className="text-navy-muted font-normal"> ({proj.type})</span>
+                      )}
+                    </p>
                     {proj.description && (
                       <p className="text-sm text-muted-foreground mt-0.5">{proj.description}</p>
                     )}
@@ -133,10 +154,15 @@ export default function CvPreview({ profile, jobTitle }) {
                         {proj.responsibilities.map((r, j) => (
                           <li key={j} className="text-sm text-foreground flex items-start gap-2">
                             <span className="text-teal mt-1.5 shrink-0">•</span>
-                            {r}
+                            <span>{r}</span>
                           </li>
                         ))}
                       </ul>
+                    )}
+                    {proj.links?.length > 0 && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {proj.links.join(" | ")}
+                      </p>
                     )}
                   </div>
                 ))}
@@ -149,13 +175,16 @@ export default function CvPreview({ profile, jobTitle }) {
                 <h2 className="text-xs font-bold text-navy tracking-wider uppercase mb-2">
                   Skills
                 </h2>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   {skills.map((skill, i) => (
                     <span
                       key={i}
                       className="px-2.5 py-1 bg-teal-light text-navy text-xs font-medium rounded-md"
                     >
                       {skill.name}
+                      {skill.level && (
+                        <span className="text-navy-muted font-normal ml-1">· {skill.level}</span>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -171,20 +200,51 @@ export default function CvPreview({ profile, jobTitle }) {
                 {education.map((edu, i) => (
                   <div key={i} className="mb-2 last:mb-0">
                     <p className="font-semibold text-foreground text-sm">
-                      {edu.degree || "Degree"} {edu.field && `- ${edu.field}`}
+                      {edu.degree || "Degree"}{edu.field ? ` — ${edu.field}` : ""}
                     </p>
                     <p className="text-sm text-muted-foreground">
                       {edu.school || "School"}
-                      {edu.startDate && ` • ${edu.startDate} - ${edu.endDate || "Present"}`}
+                      {edu.startDate && ` • ${edu.startDate} — ${edu.endDate || "Present"}`}
                     </p>
                   </div>
                 ))}
               </div>
             )}
 
+            {/* Languages */}
+            {languages.length > 0 && (
+              <div className="mb-6">
+                <h2 className="text-xs font-bold text-navy tracking-wider uppercase mb-2">
+                  Languages
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  {languages.map((lang, i) => (
+                    <span key={i} className="text-sm text-foreground">
+                      {lang.name}{lang.level ? ` (${lang.level})` : ""}
+                      {i < languages.length - 1 && <span className="text-border ml-2">•</span>}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Certifications */}
+            {certifications.length > 0 && (
+              <div className="mb-6">
+                <h2 className="text-xs font-bold text-navy tracking-wider uppercase mb-2">
+                  Certifications
+                </h2>
+                {certifications.map((cert, i) => (
+                  <p key={i} className="text-sm text-foreground">
+                    {cert.name}{cert.issuer ? ` — ${cert.issuer}` : ""}
+                  </p>
+                ))}
+              </div>
+            )}
+
             {/* Empty state */}
-            {!summary && experience.length === 0 && projects.length === 0 && skills.length === 0 && education.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground">
+            {!hasContent && (
+              <div className="text-center py-16 text-muted-foreground">
                 <p className="text-sm">Your CV will appear here as you chat with the AI.</p>
               </div>
             )}
@@ -193,4 +253,6 @@ export default function CvPreview({ profile, jobTitle }) {
       </div>
     </div>
   );
-}
+});
+
+export default CvPreview;

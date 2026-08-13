@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, MoreVertical } from "lucide-react";
+import { Send, Bot, User, MoreVertical, Download, CheckCircle } from "lucide-react";
 
-export default function ChatPanel({ messages, onSendMessage, jobTitle, isTyping }) {
+export default function ChatPanel({ messages, onSendMessage, jobTitle, isTyping, interviewComplete }) {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -12,8 +12,12 @@ export default function ChatPanel({ messages, onSendMessage, jobTitle, isTyping 
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
+  useEffect(() => {
+    if (!isTyping) inputRef.current?.focus();
+  }, [isTyping]);
+
   const handleSend = () => {
-    if (!input.trim()) return;
+    if (!input.trim() || isTyping) return;
     onSendMessage(input.trim());
     setInput("");
   };
@@ -28,7 +32,7 @@ export default function ChatPanel({ messages, onSendMessage, jobTitle, isTyping 
   return (
     <div className="flex flex-col h-screen bg-white">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-navy flex items-center justify-center">
             <Bot size={20} className="text-teal" />
@@ -36,7 +40,11 @@ export default function ChatPanel({ messages, onSendMessage, jobTitle, isTyping 
           <div>
             <h2 className="font-semibold text-navy">Pilot Assistant</h2>
             <p className="text-xs text-muted-foreground">
-              Interviewing for: <span className="text-teal font-medium">{jobTitle || "Your Position"}</span>
+              {interviewComplete ? (
+                <span className="text-teal font-medium">Interview complete — CV generated</span>
+              ) : (
+                <>Interviewing for: <span className="text-teal font-medium">{jobTitle || "Your Position"}</span></>
+              )}
             </p>
           </div>
         </div>
@@ -60,7 +68,7 @@ export default function ChatPanel({ messages, onSendMessage, jobTitle, isTyping 
               </div>
             )}
             <div
-              className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
+              className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
                 msg.role === "user"
                   ? "bg-navy text-white rounded-br-md"
                   : "bg-muted text-foreground rounded-bl-md border border-border"
@@ -95,25 +103,35 @@ export default function ChatPanel({ messages, onSendMessage, jobTitle, isTyping 
       </div>
 
       {/* Input */}
-      <div className="px-6 py-4 border-t border-border bg-white">
-        <div className="flex items-center gap-3 bg-muted rounded-xl px-4 py-2 border border-border focus-within:border-teal transition-colors">
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type your response..."
-            className="flex-1 bg-transparent outline-none text-sm text-foreground placeholder:text-muted-foreground"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim()}
-            className="w-9 h-9 rounded-lg bg-navy hover:bg-navy-light disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors shrink-0"
-          >
-            <Send size={16} className="text-white" />
-          </button>
-        </div>
+      <div className="px-6 py-4 border-t border-border bg-white shrink-0">
+        {interviewComplete ? (
+          <div className="flex items-center gap-3 bg-teal-light rounded-xl px-4 py-3 border border-teal/20">
+            <CheckCircle size={18} className="text-teal shrink-0" />
+            <p className="text-sm text-navy flex-1">
+              Interview complete. Your CV is ready on the right — download it as PDF anytime.
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 bg-muted rounded-xl px-4 py-2 border border-border focus-within:border-teal transition-colors">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isTyping}
+              placeholder={isTyping ? "Pilot is thinking..." : "Type your response..."}
+              className="flex-1 bg-transparent outline-none text-sm text-foreground placeholder:text-muted-foreground disabled:opacity-50"
+            />
+            <button
+              onClick={handleSend}
+              disabled={!input.trim() || isTyping}
+              className="w-9 h-9 rounded-lg bg-navy hover:bg-navy-light disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors shrink-0"
+            >
+              <Send size={16} className="text-white" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

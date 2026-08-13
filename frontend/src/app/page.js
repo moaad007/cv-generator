@@ -1,14 +1,37 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Settings } from "lucide-react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { Settings, CheckCircle, Download } from "lucide-react";
 import Sidebar from "@/components/cv/sidebar";
 import ChatPanel from "@/components/cv/chat-panel";
 import CvPreview from "@/components/cv/cv-preview";
 import JobInput from "@/components/cv/job-input";
 import SettingsDialog from "@/components/cv/settings-dialog";
+import { generatePDF } from "@/lib/pdf";
+import { saveSession, generateSessionId } from "@/lib/api";
 
 const STAGE_ORDER = ["personal", "education", "experience", "skills", "summary"];
+const STORAGE_KEY = "cvpilot_state";
+const SESSION_KEY = "cvpilot_session_id";
+
+function loadState() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveState(state) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.warn("Failed to save state:", e);
+  }
+}
 
 function buildSystemPrompt(jobData) {
   const jd = jobData.jobDescription;
@@ -162,27 +185,91 @@ function parseCVData(text) {
   }
 }
 
-export default function Home() {
-  const [screen, setScreen] = useState("landing");
-  const [llmKeys, setLlmKeys] = useState([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [jobData, setJobData] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [isTyping, setIsTyping] = useState(false);
-  const [activeSection, setActiveSection] = useState("personal");
-  const [completedSections, setCompletedSections] = useState([]);
-  const [profile, setProfile] = useState({
-    personal: {},
-    summary: "",
-    experience: [],
-    projects: [],
-    education: [],
-    skills: [],
-    languages: [],
-    certifications: [],
-  });
+const EMPTY_PROFILE = {
+  personal: {},
+  summary: "",
+  experience: [],
+  projects: [],
+  education: [],
+  skills: [],
+  languages: [],
+  certifications: [],
+};
 
+export default function Home() {
+  const saved = typeof window !== "undefined" ? loadState() : null;
+
+  const [screen, setScreen] = useState(saved?.screen || "landing");
+  const [llmKeys, setLlmKeys] = useState(saved?.llmKeys || []);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [jobData, setJobData] = useState(saved?.jobData || null);
+  const [messages, setMessages] = useState(saved?.messages || []);
+  const [isTyping, setIsTyping] = useState(false);
+  const [activeSection, setActiveSection] = useState(saved?.activeSection || "personal");
+  const [completedSections, setCompletedSections] = useState(saved?.completedSections || []);
+  const [generatingPDF, setGeneratingPDF] = useState(false);
+  const [interviewComplete, setInterviewComplete] = useState(saved?.interviewComplete || false);
+  const [profile, setProfile] = useState(saved?.profile || EMPTY_PROFILE);
+
+  const cvRef = useRef(null);
+  const saveTimer = useRef(null);
+  const sessionIdRef = useRef(null);
   const progress = (completedSections.length / STAGE_ORDER.length) * 100;
+
+  // Initialize session ID
+  useEffect(() => {
+    let id = localStorage.getItem(SESSION_KEY);
+    if (!id) {
+      id = generateSessionId();
+      localStorage.setItem(SESSION_KEY, id);
+    }
+    sessionIdRef.current = id;
+  }, []);
+
+  // Debounced save to localStorage + backend
+  useEffect(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      const state = {
+        screen,
+        llmKeys,
+        jobData,
+        messages,
+        activeSection,
+        completedSections,
+        profile,
+        interviewComplete,
+      };
+      saveState(state);
+
+      if (sessionIdRef.current && screen === "interview") {
+        saveSession(sessionIdRef.current, {
+          messages,
+          profile,
+          jobData,
+          completedSections,
+          activeSection,
+          interviewComplete,
+        });
+      }
+    }, 500);
+    return () => clearTimeout(saveTimer.current);
+  }, [screen, llmKeys, jobData, messages, activeSection, completedSections, profile, interviewComplete]);
+
+  const handleDownloadPDF = useCallback(async () => {
+    if (!profile.personal.name && !profile.summary && !profile.experience.length && !profile.projects.length) return;
+    setGeneratingPDF(true);
+    try {
+      const name = profile.personal.name || "cv";
+      const filename = `${name.replace(/\s+/g, "_")}_CV`;
+      await generatePDF("cv-preview-content", filename);
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      alert("PDF generation failed. Please try again.");
+    } finally {
+      setGeneratingPDF(false);
+    }
+  }, [profile]);
 
   const callLLM = useCallback(
     async (conversationHistory) => {
@@ -276,6 +363,7 @@ export default function Home() {
           }));
           setCompletedSections([...STAGE_ORDER]);
           setActiveSection("summary");
+          setInterviewComplete(true);
         }
 
         const cleanText = text.replace(/===CV_DATA===[\s\S]*?===END_CV_DATA===/, "").trim();
@@ -291,17 +379,17 @@ export default function Home() {
   const handleStartInterview = async (data) => {
     setJobData(data);
     setScreen("interview");
-    setIsTyping(true);
+    setInterviewComplete(false);
 
     const greeting = {
       role: "assistant",
       content: `I've analyzed the position${data.company ? ` at ${data.company}` : ""}. Let me walk you through what this role requires and then I'll ask you some targeted questions.\n\nTo start — what's your full name?`,
     };
     setMessages([greeting]);
-    setIsTyping(false);
   };
 
   const handleSendMessage = async (text) => {
+    if (isTyping) return;
     const userMsg = { role: "user", content: text };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
@@ -312,10 +400,8 @@ export default function Home() {
     setMessages((prev) => [...prev, aiMsg]);
     setIsTyping(false);
 
-    if (aiResponse.includes("INTERVIEW_COMPLETE") || aiResponse.includes("===CV_DATA===")) {
-      const newCompleted = [...new Set([...completedSections, "personal", "education", "experience", "skills", "summary"])];
-      setCompletedSections(newCompleted);
-      setActiveSection("summary");
+    if (aiResponse.includes("===CV_DATA===")) {
+      setInterviewComplete(true);
     } else {
       const lower = text.toLowerCase();
       const newCompleted = [...completedSections];
@@ -379,7 +465,16 @@ export default function Home() {
 
   const handleSaveKeys = (keys) => {
     setLlmKeys(keys);
-    localStorage.setItem("cvpilot-llm-keys", JSON.stringify(keys));
+  };
+
+  const handleNewCV = () => {
+    setScreen("landing");
+    setMessages([]);
+    setJobData(null);
+    setCompletedSections([]);
+    setActiveSection("personal");
+    setProfile(EMPTY_PROFILE);
+    setInterviewComplete(false);
   };
 
   return (
@@ -407,20 +502,41 @@ export default function Home() {
             activeSection={activeSection}
             completedSections={completedSections}
             progress={progress}
-            onDownload={() => {}}
+            onDownload={handleDownloadPDF}
+            onNewCV={handleNewCV}
+            generatingPDF={generatingPDF}
           />
 
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 relative">
+            {/* Interview Complete Banner */}
+            {interviewComplete && (
+              <div className="absolute top-0 left-0 right-0 z-10 bg-teal-light border-b border-teal/20 px-6 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle size={18} className="text-teal" />
+                  <span className="text-sm font-medium text-navy">Your CV is ready! Review it on the right, then download as PDF.</span>
+                </div>
+                <button
+                  onClick={handleDownloadPDF}
+                  disabled={generatingPDF}
+                  className="flex items-center gap-2 bg-navy hover:bg-navy-light text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <Download size={14} />
+                  {generatingPDF ? "Generating..." : "Download PDF"}
+                </button>
+              </div>
+            )}
+
             <ChatPanel
               messages={messages}
               onSendMessage={handleSendMessage}
               jobTitle={jobData?.jobTitle}
               isTyping={isTyping}
+              interviewComplete={interviewComplete}
             />
           </div>
 
-          <div className="w-[420px] border-l border-border shrink-0 hidden xl:block">
-            <CvPreview profile={profile} jobTitle={jobData?.jobTitle} />
+          <div className="w-[420px] border-l border-border shrink-0 hidden lg:block">
+            <CvPreview ref={cvRef} profile={profile} jobTitle={jobData?.jobTitle} />
           </div>
         </div>
       )}

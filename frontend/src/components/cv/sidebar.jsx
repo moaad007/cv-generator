@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Circle, FileText, GraduationCap, Briefcase, Lightbulb, User, Download } from "lucide-react";
+import { Check, Circle, FileText, GraduationCap, Briefcase, Lightbulb, User, Download, Loader2, Plus } from "lucide-react";
 
 const sections = [
   { id: "personal", label: "Personal Info", icon: User },
@@ -10,7 +10,7 @@ const sections = [
   { id: "summary", label: "Summary", icon: FileText },
 ];
 
-export default function Sidebar({ activeSection, completedSections, progress, onDownload }) {
+export default function Sidebar({ activeSection, completedSections, progress, onDownload, onNewCV, generatingPDF }) {
   return (
     <aside className="w-64 bg-navy text-white flex flex-col h-screen sticky top-0">
       {/* Logo */}
@@ -68,14 +68,31 @@ export default function Sidebar({ activeSection, completedSections, progress, on
         })}
       </nav>
 
-      {/* Download Button */}
-      <div className="p-4 border-t border-navy-light">
+      {/* Buttons */}
+      <div className="p-4 border-t border-navy-light space-y-2">
         <button
           onClick={onDownload}
-          className="w-full flex items-center justify-center gap-2 bg-teal hover:bg-teal/90 text-white font-medium py-2.5 px-4 rounded-lg transition-colors"
+          disabled={generatingPDF || progress < 40}
+          className="w-full flex items-center justify-center gap-2 bg-teal hover:bg-teal/90 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium py-2.5 px-4 rounded-lg transition-colors text-sm"
         >
-          <Download size={18} />
-          Download CV
+          {generatingPDF ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              Generating PDF...
+            </>
+          ) : (
+            <>
+              <Download size={16} />
+              Download CV
+            </>
+          )}
+        </button>
+        <button
+          onClick={onNewCV}
+          className="w-full flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white/80 font-medium py-2.5 px-4 rounded-lg transition-colors text-sm"
+        >
+          <Plus size={16} />
+          New CV
         </button>
       </div>
     </aside>
