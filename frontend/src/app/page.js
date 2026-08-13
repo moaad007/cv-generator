@@ -7,6 +7,7 @@ import ChatPanel from "@/components/cv/chat-panel";
 import CvPreview from "@/components/cv/cv-preview";
 import JobInput from "@/components/cv/job-input";
 import SettingsDialog from "@/components/cv/settings-dialog";
+import TemplateSelector from "@/components/cv/template-selector";
 import { generatePDF } from "@/lib/pdf";
 import { saveSession, generateSessionId } from "@/lib/api";
 
@@ -335,6 +336,7 @@ export default function Home() {
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [interviewComplete, setInterviewComplete] = useState(saved?.interviewComplete || false);
   const [profile, setProfile] = useState(saved?.profile || EMPTY_PROFILE);
+  const [template, setTemplate] = useState(saved?.template || "classic");
   const [jdSkills, setJdSkills] = useState(saved?.jdSkills || EMPTY_JD_SKILLS);
   const [coverage, setCoverage] = useState(saved?.coverage || EMPTY_COVERAGE);
 
@@ -366,6 +368,7 @@ export default function Home() {
         completedSections,
         profile,
         interviewComplete,
+        template,
         jdSkills,
         coverage,
       };
@@ -385,7 +388,7 @@ export default function Home() {
       }
     }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [screen, llmKeys, jobData, messages, activeSection, completedSections, profile, interviewComplete, jdSkills, coverage]);
+  }, [screen, llmKeys, jobData, messages, activeSection, completedSections, profile, interviewComplete, template, jdSkills, coverage]);
 
   const handleDownloadPDF = useCallback(async () => {
     if (!profile.personal.name && !profile.summary && !profile.experience.length && !profile.projects.length) return;
@@ -393,7 +396,7 @@ export default function Home() {
     try {
       const name = profile.personal.name || "cv";
       const filename = `${name.replace(/\s+/g, "_")}_CV`;
-      await generatePDF("cv-preview-content", filename);
+      await generatePDF("cv-preview-content", filename, profile, jobData?.jobTitle, template);
     } catch (err) {
       console.error("PDF generation failed:", err);
       alert("PDF generation failed. Please try again.");
@@ -552,6 +555,7 @@ export default function Home() {
         <JobInput onSubmit={handleStartInterview} />
       ) : (
         <div className="flex h-screen overflow-hidden">
+          {/* Left Sidebar */}
           <Sidebar
             activeSection={activeSection}
             completedSections={completedSections}
@@ -561,21 +565,22 @@ export default function Home() {
             generatingPDF={generatingPDF}
           />
 
-          <div className="flex-1 min-w-0 relative">
+          {/* Chat Panel - smaller */}
+          <div className="w-[380px] border-r border-border shrink-0 relative flex flex-col">
             {/* Interview Complete Banner */}
             {interviewComplete && (
-              <div className="absolute top-0 left-0 right-0 z-10 bg-teal-light border-b border-teal/20 px-6 py-3 flex items-center justify-between">
+              <div className="absolute top-0 left-0 right-0 z-10 bg-teal-light border-b border-teal/20 px-4 py-2 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <CheckCircle size={18} className="text-teal" />
-                  <span className="text-sm font-medium text-navy">Your CV is ready! Review it on the right, then download as PDF.</span>
+                  <CheckCircle size={16} className="text-teal" />
+                  <span className="text-xs font-medium text-navy">CV ready! Download below.</span>
                 </div>
                 <button
                   onClick={handleDownloadPDF}
                   disabled={generatingPDF}
-                  className="flex items-center gap-2 bg-navy hover:bg-navy-light text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 bg-navy hover:bg-navy-light text-white text-xs font-medium py-1.5 px-3 rounded-lg transition-colors disabled:opacity-50"
                 >
-                  <Download size={14} />
-                  {generatingPDF ? "Generating..." : "Download PDF"}
+                  <Download size={12} />
+                  {generatingPDF ? "..." : "PDF"}
                 </button>
               </div>
             )}
@@ -589,8 +594,25 @@ export default function Home() {
             />
           </div>
 
-          <div className="w-[420px] border-l border-border shrink-0 hidden lg:block">
-            <CvPreview ref={cvRef} profile={profile} jobTitle={jobData?.jobTitle} />
+          {/* CV Preview - center, large */}
+          <div className="flex-1 min-w-0 flex flex-col">
+            {/* Template Selector Bar */}
+            <div className="flex items-center justify-between px-6 py-2 border-b border-border bg-white shrink-0">
+              <TemplateSelector selected={template} onSelect={setTemplate} />
+              <button
+                onClick={handleDownloadPDF}
+                disabled={generatingPDF}
+                className="flex items-center gap-2 bg-navy hover:bg-navy-light text-white text-xs font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+              >
+                <Download size={14} />
+                {generatingPDF ? "Generating..." : "Download PDF"}
+              </button>
+            </div>
+
+            {/* Preview Area */}
+            <div className="flex-1 overflow-hidden">
+              <CvPreview ref={cvRef} profile={profile} jobTitle={jobData?.jobTitle} template={template} />
+            </div>
           </div>
         </div>
       )}
