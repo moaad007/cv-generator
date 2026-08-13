@@ -33,10 +33,75 @@ function saveState(state) {
   }
 }
 
-function buildSystemPrompt(jobData) {
-  const jd = jobData.jobDescription;
+// ---------------------------------------------------------------------------
+// Coverage tracking
+//
+// Instead of relying on the model to silently remember what it has covered
+// across a long conversation, we maintain an explicit checklist in React
+// state and re-inject it into the system prompt every single turn. The model
+// updates that checklist by appending a hidden <!--TRACKING ... TRACKING-->
+// block to its replies, which we parse out and strip before showing the
+// message to the user.
+// ---------------------------------------------------------------------------
+
+const EMPTY_COVERAGE = {
+  skillsCovered: {}, // { "React": "detailed" | "vague" | "no" }
+  sectionsComplete: [], // subset of STAGE_ORDER
+  currentSection: "personal",
+};
+
+const EMPTY_JD_SKILLS = {
+  requiredSkills: [],
+  niceToHave: [],
+  yearsRequired: "",
+  softSkills: [],
+  keyResponsibilities: [],
+};
+
+function buildExtractionPrompt(jobData) {
+  return `Extract structured requirements from this job description. Respond with ONLY raw JSON, no markdown fences, no commentary, exactly matching this shape:
+
+{
+  "requiredSkills": ["skill1", "skill2"],
+  "niceToHave": ["skill1", "skill2"],
+  "yearsRequired": "e.g. 3+ years",
+  "softSkills": ["skill1", "skill2"],
+  "keyResponsibilities": ["responsibility1", "responsibility2"]
+}
+
+Job title: ${jobData.jobTitle || "(not specified, infer from description)"}
+Company: ${jobData.company || "(not specified, infer from description)"}
+
+Description:
+${jobData.jobDescription}`;
+}
+
+function buildSystemPrompt(jobData, jdSkills, coverage) {
   const title = jobData.jobTitle || "Extract from the job description";
   const company = jobData.company || "Extract from the job description";
+
+  const skillChecklist = jdSkills.requiredSkills.length
+    ? jdSkills.requiredSkills
+        .map((skill) => {
+          const status = coverage.skillsCovered[skill];
+          const label =
+            status === "detailed"
+              ? "ASKED — got a detailed answer, do not ask again"
+              : status === "vague"
+              ? "ASKED — answer was vague, needs ONE follow-up then move on"
+              : status === "no"
+              ? "ASKED — candidate said no, do not ask again"
+              : "NOT YET ASKED";
+          return `- ${skill}: ${label}`;
+        })
+        .join("\n")
+    : "(skills not yet extracted)";
+
+  const sectionChecklist = STAGE_ORDER.map((s) => {
+    const done = coverage.sectionsComplete.includes(s);
+    const current = coverage.currentSection === s ? " <- YOU ARE HERE" : "";
+    return `- ${s}: ${done ? "COMPLETE" : "not complete"}${current}`;
+  }).join("\n");
 
   return `You are Pilot, an expert CV-building AI interviewer. You conduct a structured interview to extract EVERY detail needed for a job-tailored, ATS-friendly CV. You are thorough, specific, and never let vague answers slide.
 
@@ -45,88 +110,49 @@ Title: ${title}
 Company: ${company}
 
 Full description:
-${jd}
+${jobData.jobDescription}
 
-## STEP 1 — ANALYZE THE JOB (do this silently before asking anything)
-Break the JD into:
-- Required technical skills (list each one)
-- Preferred/nice-to-have skills
-- Years of experience required
-- Soft skills mentioned
-- Key responsibilities
-- Education requirements
+## LIVE CHECKLIST — THIS IS YOUR SOURCE OF TRUTH, NOT YOUR MEMORY OF THE CHAT
+Do not re-derive what's been covered from the conversation history. Use this checklist exactly as given below; it is kept up to date for you every turn.
 
-You will use this list to drive your questions.
+### Required skills to cover:
+${skillChecklist}
 
-## STEP 2 — INTERVIEW SECTIONS (go through IN ORDER, do not skip)
-
-### A. Personal Info (1-2 questions)
-- "What's your full name?"
-- "What email and phone number should appear on your CV?"
-- "Where are you located (city, country)?"
-- "Do you have a LinkedIn or GitHub/portfolio URL you'd like included?"
-
-### B. Technical Skills (2-4 questions, one per key JD skill)
-For EACH required skill in the JD, ask directly:
-- "The job requires ${title} experience with [SKILL]. Have you used [SKILL]? In what context and on what projects?"
-If they say yes, follow up:
-- "Can you describe a specific project where you used [SKILL]? What was your role and what did you personally do?"
-If they say no, move on. Do not push.
-
-Also ask about relevant skills NOT in the JD if they came up in their background.
-
-### C. Work Experience (3-5 questions)
-- "Have you worked professionally in a role related to ${title}? Tell me about your most relevant position."
-For EACH role they mention, dig into:
-- Company name
-- Job title
-- Start and end dates (month/year)
-- Employment type (full-time, part-time, internship, freelance)
-- "What were your main responsibilities?"
-- "What did YOU personally build, ship, or accomplish? (Not the team — you specifically)"
-- "What technologies and tools did you use daily?"
-- "Did you receive any recognition, awards, or measurable results?"
-
-### D. Projects (2-3 questions)
-- "Do you have any personal, freelance, open-source, or school projects relevant to this role?"
-For EACH project:
-- Project name
-- "What does this project do? What problem does it solve?"
-- "What technologies did you use?"
-- "What did YOU personally build? Describe your specific contributions."
-- "Is there a live URL or GitHub repo?"
-
-### E. Education (1-2 questions)
-- "What's your highest level of education? Degree, field of study, school name, and dates."
-- "Any relevant coursework, thesis, or academic projects?"
-
-### F. Certifications & Extras (1-2 questions)
-- "Do you have any certifications, awards, or notable achievements?"
-- "What languages do you speak?"
-- "Anything else you'd like to highlight on your CV?"
+### Sections:
+${sectionChecklist}
 
 ## RULES — FOLLOW THESE STRICTLY
 
 1. ONE question at a time. Never bundle multiple questions.
 2. NEVER invent or assume information. Only record what the candidate explicitly says.
-3. NEVER accept vague answers. If they say "I worked on the frontend", always follow up:
+3. Pick your next question by scanning the checklist above for the first "NOT YET ASKED" skill or "not complete" section — in that order: finish the current section's skills before moving to the next section. Do NOT ask generic catch-all questions ("tell me about your experience") while specific unasked skills remain on the checklist — ask about those skills by name instead.
+4. NEVER accept vague answers. If they say "I worked on the frontend", always follow up with something concrete:
    - "What specific features did you build?"
    - "What framework or library did you use?"
    - "What was YOUR specific contribution?"
-4. Do NOT repeat questions. Track what has been covered.
-5. Do NOT end the interview early. You MUST cover all 6 sections above.
-6. If a section has weak or missing answers, ask more questions in that section.
+5. Do NOT repeat a question about a skill marked ASKED above, even if the conversation feels like it needs it — trust the checklist.
+6. Do NOT end the interview early. All sections must show COMPLETE.
 7. Be conversational and encouraging. Acknowledge good answers before moving on.
 8. When asking about a skill, reference the JD: "This role specifically requires X..."
-9. After the candidate answers, briefly note what you learned, then move to the next question.
+
+## AFTER EVERY REPLY — UPDATE THE CHECKLIST
+At the very end of EVERY response (including the final one), append a hidden tracking block — the user never sees this, so do not reference it in your visible reply. Format exactly like this, valid JSON on one line:
+
+<!--TRACKING{"skillsCovered":{"SkillName":"detailed|vague|no"},"sectionsComplete":["personal"],"currentSection":"experience"}TRACKING-->
+
+Rules for this block:
+- Only include skills/sections that changed or are newly known this turn; omit ones you haven't touched (they persist automatically).
+- "detailed" = candidate gave a specific project/context. "vague" = they answered but with no specifics after one follow-up attempt. "no" = candidate doesn't have this skill.
+- Mark a section "sectionsComplete" only once every question in that section has a real answer.
+- currentSection must always be present and reflect where you're headed next.
 
 ## WHEN TO END THE INTERVIEW
-End ONLY when you have:
-- [ ] Full name and at least email
-- [ ] At least 1 work experience OR 1 detailed project
-- [ ] 5+ technical skills with context (not just names)
-- [ ] Education details
-- [ ] Enough detail to write strong, specific CV bullet points
+End ONLY when every section on the checklist is COMPLETE and you have:
+- Full name and at least email
+- At least 1 work experience OR 1 detailed project
+- 5+ technical skills with real context (not just names)
+- Education details
+- Enough detail to write strong, specific CV bullet points
 
 When ending, say: "Thank you! I have everything I need. Your CV is being generated."
 
@@ -172,7 +198,7 @@ Then output the structured data on a new line exactly like this:
 }
 ===END_CV_DATA===
 
-IMPORTANT: Write the CV data JSON exactly between ===CV_DATA=== and ===END_CV_DATA=== markers. Use ONLY information the candidate gave you. Make the professional summary specific to this job, not generic.`;
+IMPORTANT: Write the CV data JSON exactly between ===CV_DATA=== and ===END_CV_DATA=== markers. Use ONLY information the candidate gave you. Make the professional summary specific to this job, not generic. Still include the <!--TRACKING...TRACKING--> block after the CV data on the final turn.`;
 }
 
 function parseCVData(text) {
@@ -185,6 +211,29 @@ function parseCVData(text) {
   }
 }
 
+function parseTracking(text) {
+  const match = text.match(/<!--TRACKING([\s\S]*?)TRACKING-->/);
+  const cleanText = text.replace(/<!--TRACKING[\s\S]*?TRACKING-->/, "").replace(/===CV_DATA===[\s\S]*?===END_CV_DATA===/, "").trim();
+  if (!match) return { tracking: null, cleanText: cleanText || text };
+  try {
+    const tracking = JSON.parse(match[1].trim());
+    return { tracking, cleanText };
+  } catch (e) {
+    console.warn("Failed to parse tracking block:", e);
+    return { tracking: null, cleanText };
+  }
+}
+
+function mergeCoverage(prevCoverage, tracking) {
+  if (!tracking) return prevCoverage;
+  const skillsCovered = { ...prevCoverage.skillsCovered, ...(tracking.skillsCovered || {}) };
+  const sectionsComplete = Array.from(
+    new Set([...prevCoverage.sectionsComplete, ...(tracking.sectionsComplete || [])])
+  );
+  const currentSection = tracking.currentSection || prevCoverage.currentSection;
+  return { skillsCovered, sectionsComplete, currentSection };
+}
+
 const EMPTY_PROFILE = {
   personal: {},
   summary: "",
@@ -195,6 +244,82 @@ const EMPTY_PROFILE = {
   languages: [],
   certifications: [],
 };
+
+// ---------------------------------------------------------------------------
+// Provider call — pulled out as a standalone function so both the
+// conversational interview and the one-off JD extraction call can share it.
+// ---------------------------------------------------------------------------
+
+async function callProviderAPI(activeKey, systemContent, conversationMessages, { temperature = 0.4, maxTokens = 2048 } = {}) {
+  let url, headers, body;
+
+  const apiMessages = [{ role: "system", content: systemContent }, ...conversationMessages];
+
+  if (activeKey.provider === "openai") {
+    url = "https://api.openai.com/v1/chat/completions";
+    headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
+    body = { model: activeKey.model || "gpt-4o-mini", messages: apiMessages, temperature };
+  } else if (activeKey.provider === "anthropic") {
+    url = "https://api.anthropic.com/v1/messages";
+    headers = { "Content-Type": "application/json", "x-api-key": activeKey.apiKey, "anthropic-version": "2023-06-01" };
+    const system = apiMessages.shift();
+    body = { model: activeKey.model || "claude-3-5-haiku-20241022", max_tokens: maxTokens, system: system.content, messages: apiMessages, temperature };
+  } else if (activeKey.provider === "google") {
+    const model = activeKey.model || "gemini-2.5-flash";
+    url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    headers = { "Content-Type": "application/json", "x-goog-api-key": activeKey.apiKey };
+    const contents = apiMessages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+    const sysMsg = apiMessages.find((m) => m.role === "system");
+    body = {
+      contents,
+      systemInstruction: sysMsg ? { parts: [{ text: sysMsg.content }] } : undefined,
+      generationConfig: { temperature, maxOutputTokens: maxTokens },
+    };
+  } else if (activeKey.provider === "openrouter") {
+    url = "https://openrouter.ai/api/v1/chat/completions";
+    headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}`, "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "" };
+    body = { model: activeKey.model || "openrouter/free", messages: apiMessages, temperature };
+  } else if (activeKey.provider === "nvidia") {
+    url = "https://integrate.api.nvidia.com/v1/chat/completions";
+    headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
+    body = { model: activeKey.model || "meta/llama-3.1-70b-instruct", messages: apiMessages, temperature, max_tokens: maxTokens };
+  } else if (activeKey.provider === "groq") {
+    url = "https://api.groq.com/openai/v1/chat/completions";
+    headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
+    body = { model: activeKey.model || "llama-3.3-70b-versatile", messages: apiMessages, temperature };
+  } else if (activeKey.provider === "deepseek") {
+    url = "https://api.deepseek.com/chat/completions";
+    headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
+    body = { model: activeKey.model || "deepseek-chat", messages: apiMessages, temperature };
+  } else if (activeKey.provider === "custom") {
+    url = `${activeKey.endpoint}/chat/completions`;
+    headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
+    body = { model: activeKey.model || "default", messages: apiMessages, temperature };
+  } else {
+    throw new Error(`Unsupported provider: ${activeKey.provider}`);
+  }
+
+  console.log("[LLM Request]", { provider: activeKey.provider, url, model: body.model });
+
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const data = await res.json();
+
+  console.log("[LLM Response]", { status: res.status, data });
+
+  if (!res.ok) {
+    const errMsg = data.error?.message || data.message || JSON.stringify(data);
+    throw new Error(`API Error (${res.status}): ${errMsg}`);
+  }
+
+  if (activeKey.provider === "anthropic") {
+    return data.content?.[0]?.text || "";
+  } else if (activeKey.provider === "google") {
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  }
+  return data.choices?.[0]?.message?.content || "";
+}
 
 export default function Home() {
   const saved = typeof window !== "undefined" ? loadState() : null;
@@ -210,6 +335,8 @@ export default function Home() {
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [interviewComplete, setInterviewComplete] = useState(saved?.interviewComplete || false);
   const [profile, setProfile] = useState(saved?.profile || EMPTY_PROFILE);
+  const [jdSkills, setJdSkills] = useState(saved?.jdSkills || EMPTY_JD_SKILLS);
+  const [coverage, setCoverage] = useState(saved?.coverage || EMPTY_COVERAGE);
 
   const cvRef = useRef(null);
   const saveTimer = useRef(null);
@@ -239,6 +366,8 @@ export default function Home() {
         completedSections,
         profile,
         interviewComplete,
+        jdSkills,
+        coverage,
       };
       saveState(state);
 
@@ -250,11 +379,13 @@ export default function Home() {
           completedSections,
           activeSection,
           interviewComplete,
+          jdSkills,
+          coverage,
         });
       }
     }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [screen, llmKeys, jobData, messages, activeSection, completedSections, profile, interviewComplete]);
+  }, [screen, llmKeys, jobData, messages, activeSection, completedSections, profile, interviewComplete, jdSkills, coverage]);
 
   const handleDownloadPDF = useCallback(async () => {
     if (!profile.personal.name && !profile.summary && !profile.experience.length && !profile.projects.length) return;
@@ -271,83 +402,53 @@ export default function Home() {
     }
   }, [profile]);
 
+  // One-off call to extract a structured skill checklist from the JD before
+  // the interview starts. This is what the system prompt's checklist is
+  // seeded from, instead of asking the model to "silently analyze" the JD
+  // fresh every single turn.
+  const extractJDSkills = useCallback(
+    async (data) => {
+      const activeKey = llmKeys[0];
+      if (!activeKey) return EMPTY_JD_SKILLS;
+
+      try {
+        const raw = await callProviderAPI(activeKey, "You are a precise JSON extraction tool. Output ONLY valid JSON, nothing else.", [
+          { role: "user", content: buildExtractionPrompt(data) },
+        ], { temperature: 0.1, maxTokens: 1024 });
+
+        const cleaned = raw.replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(cleaned);
+        return {
+          requiredSkills: parsed.requiredSkills || [],
+          niceToHave: parsed.niceToHave || [],
+          yearsRequired: parsed.yearsRequired || "",
+          softSkills: parsed.softSkills || [],
+          keyResponsibilities: parsed.keyResponsibilities || [],
+        };
+      } catch (err) {
+        console.error("[JD Extraction Error]", err);
+        return EMPTY_JD_SKILLS;
+      }
+    },
+    [llmKeys]
+  );
+
   const callLLM = useCallback(
     async (conversationHistory) => {
       const activeKey = llmKeys[0];
       if (!activeKey) {
-        return "Please add an API key in Settings (gear icon top-right) to start the interview.";
+        return { text: "Please add an API key in Settings (gear icon top-right) to start the interview.", tracking: null };
       }
 
-      const systemMsg = { role: "system", content: buildSystemPrompt(jobData) };
-      const apiMessages = [systemMsg, ...conversationHistory.map((m) => ({ role: m.role, content: m.content }))];
+      const systemContent = buildSystemPrompt(jobData, jdSkills, coverage);
 
       try {
-        let url, headers, body;
-
-        if (activeKey.provider === "openai") {
-          url = "https://api.openai.com/v1/chat/completions";
-          headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
-          body = { model: activeKey.model || "gpt-4o-mini", messages: apiMessages, temperature: 0.7 };
-        } else if (activeKey.provider === "anthropic") {
-          url = "https://api.anthropic.com/v1/messages";
-          headers = { "Content-Type": "application/json", "x-api-key": activeKey.apiKey, "anthropic-version": "2023-06-01" };
-          const system = apiMessages.shift();
-          body = { model: activeKey.model || "claude-3-5-haiku-20241022", max_tokens: 2048, system: system.content, messages: apiMessages };
-        } else if (activeKey.provider === "google") {
-          const model = activeKey.model || "gemini-3.5-flash";
-          url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-          headers = { "Content-Type": "application/json", "x-goog-api-key": activeKey.apiKey };
-          const contents = apiMessages
-            .filter((m) => m.role !== "system")
-            .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
-          const sysMsg = apiMessages.find((m) => m.role === "system");
-          body = {
-            contents,
-            systemInstruction: sysMsg ? { parts: [{ text: sysMsg.content }] } : undefined,
-            generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
-          };
-        } else if (activeKey.provider === "openrouter") {
-          url = "https://openrouter.ai/api/v1/chat/completions";
-          headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}`, "HTTP-Referer": window.location.origin };
-          body = { model: activeKey.model || "openrouter/free", messages: apiMessages, temperature: 0.7 };
-        } else if (activeKey.provider === "nvidia") {
-          url = "https://integrate.api.nvidia.com/v1/chat/completions";
-          headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
-          body = { model: activeKey.model || "meta/llama-3.1-70b-instruct", messages: apiMessages, temperature: 0.7, max_tokens: 2048 };
-        } else if (activeKey.provider === "groq") {
-          url = "https://api.groq.com/openai/v1/chat/completions";
-          headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
-          body = { model: activeKey.model || "llama-3.3-70b-versatile", messages: apiMessages, temperature: 0.7 };
-        } else if (activeKey.provider === "deepseek") {
-          url = "https://api.deepseek.com/chat/completions";
-          headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
-          body = { model: activeKey.model || "deepseek-chat", messages: apiMessages, temperature: 0.7 };
-        } else if (activeKey.provider === "custom") {
-          url = `${activeKey.endpoint}/chat/completions`;
-          headers = { "Content-Type": "application/json", Authorization: `Bearer ${activeKey.apiKey}` };
-          body = { model: activeKey.model || "default", messages: apiMessages, temperature: 0.7 };
-        }
-
-        console.log("[LLM Request]", { provider: activeKey.provider, url, model: body.model });
-
-        const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-        const data = await res.json();
-
-        console.log("[LLM Response]", { status: res.status, data });
-
-        if (!res.ok) {
-          const errMsg = data.error?.message || data.message || JSON.stringify(data);
-          return `API Error (${res.status}): ${errMsg}`;
-        }
-
-        let text = "";
-        if (activeKey.provider === "anthropic") {
-          text = data.content?.[0]?.text || "";
-        } else if (activeKey.provider === "google") {
-          text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        } else {
-          text = data.choices?.[0]?.message?.content || "";
-        }
+        const text = await callProviderAPI(
+          activeKey,
+          systemContent,
+          conversationHistory.map((m) => ({ role: m.role, content: m.content })),
+          { temperature: 0.4 }
+        );
 
         const cvData = parseCVData(text);
         if (cvData) {
@@ -366,26 +467,32 @@ export default function Home() {
           setInterviewComplete(true);
         }
 
-        const cleanText = text.replace(/===CV_DATA===[\s\S]*?===END_CV_DATA===/, "").trim();
-        return cleanText || text;
+        const { tracking, cleanText } = parseTracking(text);
+        return { text: cleanText || text, tracking };
       } catch (err) {
         console.error("[LLM Error]", err);
-        return `Error: ${err.message}. Please check your API key and try again.`;
+        return { text: `Error: ${err.message}. Please check your API key and try again.`, tracking: null };
       }
     },
-    [llmKeys, jobData]
+    [llmKeys, jobData, jdSkills, coverage]
   );
 
   const handleStartInterview = async (data) => {
     setJobData(data);
     setScreen("interview");
     setInterviewComplete(false);
+    setCoverage(EMPTY_COVERAGE);
 
     const greeting = {
       role: "assistant",
       content: `I've analyzed the position${data.company ? ` at ${data.company}` : ""}. Let me walk you through what this role requires and then I'll ask you some targeted questions.\n\nTo start — what's your full name?`,
     };
     setMessages([greeting]);
+
+    // Extract the skill checklist in the background so the very first real
+    // question already has the full checklist to work from.
+    const skills = await extractJDSkills(data);
+    setJdSkills(skills);
   };
 
   const handleSendMessage = async (text) => {
@@ -395,72 +502,17 @@ export default function Home() {
     setMessages(newMessages);
     setIsTyping(true);
 
-    const aiResponse = await callLLM(newMessages);
+    const { text: aiResponse, tracking } = await callLLM(newMessages);
     const aiMsg = { role: "assistant", content: aiResponse };
     setMessages((prev) => [...prev, aiMsg]);
     setIsTyping(false);
 
-    if (aiResponse.includes("===CV_DATA===")) {
-      setInterviewComplete(true);
-    } else {
-      const lower = text.toLowerCase();
-      const newCompleted = [...completedSections];
-
-      if (lower.match(/\b(name|i'm|my name|i am)\b/) && !profile.personal.name) {
-        const nameMatch = text.match(/(?:I'm|My name is|I am)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i);
-        if (nameMatch) {
-          setProfile((p) => ({ ...p, personal: { ...p.personal, name: nameMatch[1] } }));
-          if (!newCompleted.includes("personal")) newCompleted.push("personal");
-        }
-      }
-
-      if (lower.match(/\b(email|@)\b/) && !profile.personal.email) {
-        const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
-        if (emailMatch) {
-          setProfile((p) => ({ ...p, personal: { ...p.personal, email: emailMatch[0] } }));
-          if (!newCompleted.includes("personal")) newCompleted.push("personal");
-        }
-      }
-
-      if (lower.match(/\b(github|git hub)\b/) && !profile.personal.github) {
-        const ghMatch = text.match(/github\.com\/[\w-]+/i) || text.match(/[\w-]+$/);
-        if (ghMatch) {
-          setProfile((p) => ({
-            ...p,
-            personal: { ...p.personal, github: ghMatch[0].startsWith("http") ? ghMatch[0] : `github.com/${ghMatch[0]}` },
-          }));
-        }
-      }
-
-      if (lower.match(/\b(react|next\.?js|vue|angular|typescript|javascript|node\.?js|python|java|sql|docker|aws|git|html|css)\b/)) {
-        const techMap = {
-          react: "React", "next.js": "Next.js", vue: "Vue.js", angular: "Angular",
-          typescript: "TypeScript", javascript: "JavaScript", "node.js": "Node.js",
-          python: "Python", java: "Java", sql: "SQL", docker: "Docker", aws: "AWS",
-          git: "Git", html: "HTML", css: "CSS",
-        };
-        const techs = Object.entries(techMap).filter(([k]) => lower.includes(k)).map(([, v]) => v);
-        if (techs.length) {
-          setProfile((p) => {
-            const existing = p.skills.map((s) => s.name);
-            const newTechs = techs.filter((t) => !existing.includes(t)).map((t) => ({ name: t }));
-            return { ...p, skills: [...p.skills, ...newTechs] };
-          });
-          if (!newCompleted.includes("skills")) newCompleted.push("skills");
-        }
-      }
-
-      if (lower.match(/\b(degree|bachelor|master|university|college|studied|graduated)\b/)) {
-        if (!newCompleted.includes("education")) newCompleted.push("education");
-      }
-
-      if (lower.match(/\b(internship|intern|worked at|employed|job at|position at|company)\b/)) {
-        if (!newCompleted.includes("experience")) newCompleted.push("experience");
-      }
-
-      setCompletedSections(newCompleted);
-      setActiveSection(newCompleted[newCompleted.length - 1] || "personal");
-    }
+    setCoverage((prev) => {
+      const next = mergeCoverage(prev, tracking);
+      setCompletedSections(next.sectionsComplete);
+      setActiveSection(next.currentSection);
+      return next;
+    });
   };
 
   const handleSaveKeys = (keys) => {
@@ -475,6 +527,8 @@ export default function Home() {
     setActiveSection("personal");
     setProfile(EMPTY_PROFILE);
     setInterviewComplete(false);
+    setJdSkills(EMPTY_JD_SKILLS);
+    setCoverage(EMPTY_COVERAGE);
   };
 
   return (
