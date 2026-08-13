@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  jobs      Job[]
+  profile   CandidateProfile?
+  llmKeys   LlmKey[]
+}
+
+model LlmKey {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider  String
+  apiKey    String
+  model     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, provider])
+}
+
+model CandidateProfile {
+  id            String         @id @default(cuid())
+  userId        String         @unique
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  personal      PersonalInfo?
+  summary       String?
+  experience    Experience[]
+  projects      Project[]
+  education     Education[]
+  skills        Skill[]
+  languages     Language[]
+  certifications Certification[]
+  achievements  Achievement[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model PersonalInfo {
+  id        String  @id @default(cuid())
+  profileId String  @unique
+  profile   CandidateProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name      String?
+  email     String?
+  phone     String?
+  location  String?
+  linkedin  String?
+  github    String?
+}
+
+model Experience {
+  id              String   @id @default(cuid())
+  profileId       String
+  profile         CandidateProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  company         String?
+  role            String?
+  location        String?
+  startDate       String?
+  endDate         String?
+  employmentType  String?
+  responsibilities String[]
+  achievements    String[]
+  technologies    String[]
+}
+
+model Project {
+  id              String   @id @default(cuid())
+  profileId       String
+  profile         CandidateProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name            String?
+  description     String?
+  type            String?
+  technologies    String[]
+  features        String[]
+  responsibilities String[]
+  achievements    String[]
+  links           String[]
+}
+
+model Education {
+  id        String  @id @default(cuid())
+  profileId String
+  profile   CandidateProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  school    String?
+  degree    String?
+  field     String?
+  startDate String?
+  endDate   String?
+  gpa       String?
+}
+
+model Skill {
+  id        String  @id @default(cuid())
+  profileId String
+  profile   CandidateProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name      String
+  level     String?
+  category  String?
+}
+
+model Language {
+  id        String  @id @default(cuid())
+  profileId String
+  profile   CandidateProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name      String
+  level     String?
+}
+
+model Certification {
+  id        String  @id @default(cuid())
+  profileId String
+  profile   CandidateProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name      String
+  issuer    String?
+  date      String?
+}
+
+model Achievement {
+  id        String  @id @default(cuid())
+  profileId String
+  profile   CandidateProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  title     String
+  date      String?
+  description String?
+}
+
+model Job {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String?
+  company         String?
+  location        String?
+  seniority       String?
+  rawDescription  String
+  requiredSkills  String[]
+  preferredSkills String[]
+  responsibilities String[]
+  softSkills      String[]
+  experienceRequirements String[]
+  conversations   Conversation[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Conversation {
+  id            String   @id @default(cuid())
+  jobId         String
+  job           Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  messages      Message[]
+  stage         String   @default("JOB_ANALYSIS")
+  questionsAsked Int      @default(0)
+  topicsCovered  String[]
+  candidateFacts Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  timestamp      DateTime     @default(now())
+}
